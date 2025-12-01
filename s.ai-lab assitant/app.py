@@ -1,7 +1,7 @@
 import streamlit as st
-import json
+from anthropic import Anthropic
 from datetime import datetime, timedelta
-import os
+import json
 
 # Configuración de la página
 st.set_page_config(
@@ -10,19 +10,88 @@ st.set_page_config(
     layout="wide"
 )
 
+# Inicializar cliente de Anthropic
+@st.cache_resource
+def get_anthropic_client():
+    return Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
+
 # Sistema de códigos y límites
 CODIGOS = {
-    "EXTRA2024": {
+    "EXTRA2025": {
         "tipo": "gratis",
         "limite_diario": 5,
         "temas_disponibles": ["Dosificación", "Soluciones Porcentuales"],
-        "expira": "2024-12-08",
+        "expira": "2025-12-05",
         "usos_maximos": 500,
         "usos_actuales": 0
     }
 }
 
-# Función para generar códigos premium (se llamará después del pago)
+# Prompt del sistema para S.AI
+SYSTEM_PROMPT = """Eres S.AI, un Asesor Farmacológico Especializado entrenado específicamente para resolver problemas de laboratorio de Farmacología y Toxicología de la UANL.
+
+## REGLAS CRÍTICAS (NUNCA VIOLAR)
+
+### Precisión Técnica
+1. **Densidad del etanol**: SIEMPRE 0.79 g/mL
+2. **Decimales**: SIEMPRE exactamente 2 decimales en procedimientos y respuesta final
+3. **Conversiones estándar**:
+   - 20 gotas = 1 mL
+   - 60 microgotas = 1 mL
+   - 1000 mg = 1 g
+   - 1000 mL = 1 L
+
+### Distinción Crítica
+- **"Aforar"**: Diluir HASTA completar el volumen final (volumen final = volumen objetivo)
+- **"Diluir"**: AGREGAR volumen (volumen final = volumen inicial + volumen agregado)
+
+### Pesos Moleculares Fijos
+- CaCl₂ = 111 g/mol
+- NaCl = 58.5 g/mol
+- KCl = 74.5 g/mol
+
+## FORMATO DE RESPUESTA
+
+Usa este formato SIEMPRE:
+
+### 🔍 ANÁLISIS DEL PROBLEMA
+
+**Tipo:** [Dosificación / Porcentaje / etc.]
+**Datos clave:**
+- Dato 1: valor
+- Dato 2: valor
+
+**Se solicita:** [Lo que pide el problema]
+
+---
+
+### ⚙️ MÉTODO ALGORÍTMICO
+
+**Paso 1: [Nombre del paso]**
+Cálculo: [fórmula]
+Resultado: XX.XX [unidades]
+
+**Paso 2: [Nombre del paso]**
+Cálculo: [fórmula]
+Resultado: XX.XX [unidades]
+
+---
+
+### ✅ RESPUESTA FINAL
+
+**R = XX.XX [unidades]**
+
+---
+
+### 💡 CONCEPTO CLAVE
+
+[Explicación breve del principio farmacológico relevante]
+
+---
+
+Recuerda: Siempre usa EXACTAMENTE 2 decimales en todos los cálculos y respuestas."""
+
+# Función para generar códigos premium
 def generar_codigo_premium(precio):
     codigo = f"PREMIUM{datetime.now().strftime('%Y%m%d%H%M%S')}"
     CODIGOS[codigo] = {
@@ -44,6 +113,8 @@ if 'problemas_hoy' not in st.session_state:
     st.session_state.problemas_hoy = 0
 if 'ultima_fecha' not in st.session_state:
     st.session_state.ultima_fecha = datetime.now().strftime("%Y-%m-%d")
+if 'historial' not in st.session_state:
+    st.session_state.historial = []
 
 # Resetear contador diario
 fecha_hoy = datetime.now().strftime("%Y-%m-%d")
@@ -87,8 +158,41 @@ st.markdown("""
         font-size: 1.2em;
         margin: 1em 0;
     }
+    .problema-card {
+        background: #f8f9fa;
+        border-left: 4px solid #1E88E5;
+        padding: 1em;
+        margin: 1em 0;
+        border-radius: 5px;
+    }
 </style>
 """, unsafe_allow_html=True)
+
+# Función para consultar a Claude
+def consultar_claude(problema, tema):
+    try:
+        client = get_anthropic_client()
+        
+        mensaje_usuario = f"""Tema: {tema}
+
+Problema:
+{problema}
+
+Por favor, resuelve este problema siguiendo tu formato estructurado con análisis, método algorítmico paso a paso, respuesta final y concepto clave."""
+
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=2000,
+            system=SYSTEM_PROMPT,
+            messages=[
+                {"role": "user", "content": mensaje_usuario}
+            ]
+        )
+        
+        return response.content[0].text
+    
+    except Exception as e:
+        return f"❌ Error al procesar: {str(e)}\n\nPor favor contacta a soporte: +52 81 1009 4890"
 
 # Pantalla de login
 if not st.session_state.autenticado:
@@ -98,29 +202,24 @@ if not st.session_state.autenticado:
     col1, col2, col3 = st.columns([1, 2, 1])
     
     with col2:
-        st.info("🎓 **ACCESO GRATIS PARA EL EXTRAORDINARIO**\n\nCódigo: **EXTRA2024**\n\n✅ 5 problemas diarios\n✅ Dosificación y Porcentajes\n✅ Válido hasta el 8 de diciembre")
+        st.info("🎓 **ACCESO GRATIS PARA EL EXTRAORDINARIO 2025**\n\nCódigo: **EXTRA2025**\n\n✅ 5 problemas diarios\n✅ Dosificación y Porcentajes\n✅ Válido hasta el 5 de diciembre 2025")
         
-        codigo_input = st.text_input("Ingresa tu código de acceso:", placeholder="EXTRA2024")
+        codigo_input = st.text_input("Ingresa tu código de acceso:", placeholder="EXTRA2025")
         
         if st.button("🚀 ACCEDER", use_container_width=True):
             if codigo_input in CODIGOS:
                 codigo_data = CODIGOS[codigo_input]
                 
-                # Verificar si el código ha expirado
                 if datetime.strptime(codigo_data["expira"], "%Y-%m-%d") < datetime.now():
                     st.error("❌ Este código ha expirado")
-                # Verificar usos máximos (solo para códigos gratuitos)
                 elif codigo_data["tipo"] == "gratis" and codigo_data["usos_actuales"] >= codigo_data["usos_maximos"]:
                     st.error("❌ Este código ha alcanzado el límite de usuarios")
-                # Verificar si código premium ya fue usado
                 elif codigo_data.get("usado", False):
                     st.error("❌ Este código ya ha sido utilizado")
                 else:
-                    # Autenticar
                     st.session_state.autenticado = True
                     st.session_state.codigo_actual = codigo_input
                     
-                    # Incrementar contador de usos para códigos gratuitos
                     if codigo_data["tipo"] == "gratis":
                         CODIGOS[codigo_input]["usos_actuales"] += 1
                     else:
@@ -134,7 +233,7 @@ if not st.session_state.autenticado:
         st.markdown("### 🔓 ¿Necesitas acceso completo?")
         st.markdown("Contáctanos vía WhatsApp: **+52 81 1009 4890**")
 
-# Pantalla principal (después de autenticarse)
+# Pantalla principal
 else:
     codigo_data = CODIGOS[st.session_state.codigo_actual]
     
@@ -159,7 +258,7 @@ else:
         st.error(f"⚠️ Has alcanzado el límite diario de {limite} problemas. Regresa mañana o actualiza tu plan.")
     
     # Mostrar upgrade si es usuario gratuito
-    if codigo_data["tipo"] == "gratis":
+    if codigo_data["tipo"] == "gratis" and st.session_state.problemas_hoy >= 2:
         st.markdown("""
         <div class="upgrade-box">
             <h2>🔓 DESBLOQUEA TODO EL POTENCIAL</h2>
@@ -196,13 +295,11 @@ else:
         st.markdown("---")
         st.markdown("## 🧪 Resolver Problema")
         
-        # Selector de tema
         tema = st.selectbox(
             "Selecciona el tema:",
             codigo_data["temas_disponibles"]
         )
         
-        # Input del problema
         problema = st.text_area(
             "Describe tu problema o pregunta:",
             placeholder="Ejemplo: Paciente de 25kg necesita Amoxicilina 50mg/kg/día cada 8 horas. La presentación es al 5%. ¿Cuántos mL por dosis?",
@@ -211,30 +308,38 @@ else:
         
         if st.button("✨ Resolver Problema", use_container_width=True, type="primary"):
             if problema.strip():
-                # Aquí irá la integración con la API (Claude o OpenAI)
                 st.session_state.problemas_hoy += 1
                 
-                with st.spinner("🔬 Analizando tu problema..."):
-                    # PLACEHOLDER - Aquí conectaremos la API
-                    st.success("✅ Problema procesado")
+                with st.spinner("🔬 Analizando tu problema con Claude..."):
+                    respuesta = consultar_claude(problema, tema)
                     
-                    st.markdown("### 📋 Análisis del Problema")
-                    st.info("""
-                    **NOTA TEMPORAL:** La conexión con la IA se activará en el siguiente paso.
+                    # Guardar en historial
+                    st.session_state.historial.insert(0, {
+                        "tema": tema,
+                        "problema": problema,
+                        "respuesta": respuesta,
+                        "timestamp": datetime.now().strftime("%H:%M:%S")
+                    })
                     
-                    Por ahora, este es el flujo:
-                    1. Identificación del tipo de problema
-                    2. Extracción de datos clave
-                    3. Aplicación del algoritmo correcto
-                    4. Solución paso a paso
-                    5. Respuesta final con 2 decimales
-                    """)
+                    st.markdown("---")
+                    st.markdown(respuesta)
                     
                     # Mostrar problemas restantes
                     nuevos_restantes = limite - st.session_state.problemas_hoy
-                    st.caption(f"Te quedan {nuevos_restantes} problemas hoy")
+                    st.success(f"✅ Problema resuelto | Te quedan {nuevos_restantes} problemas hoy")
             else:
                 st.warning("⚠️ Por favor describe tu problema")
+    
+    # Mostrar historial
+    if st.session_state.historial:
+        st.markdown("---")
+        st.markdown("## 📚 Historial de Problemas Resueltos")
+        
+        for idx, item in enumerate(st.session_state.historial[:3]):  # Mostrar últimos 3
+            with st.expander(f"🕐 {item['timestamp']} - {item['tema']}", expanded=(idx==0)):
+                st.markdown(f"**Problema:** {item['problema']}")
+                st.markdown("---")
+                st.markdown(item['respuesta'])
     
     # Footer
     st.markdown("---")
